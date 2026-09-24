@@ -74,7 +74,29 @@ export class VideoProcessingService extends Effect.Service<VideoProcessingServic
       );
 
       const openaiApiKey = yield* Config.string("OPENAI_API_KEY");
-      const openai = new OpenAI({ apiKey: openaiApiKey });
+      // Optional: point transcription at an OpenAI-compatible provider
+      // (e.g. OPENAI_BASE_URL=https://openrouter.ai/api/v1 with
+      // WHISPER_MODEL=openai/whisper-1). Unset, it talks to OpenAI directly.
+      const openaiBaseUrl = yield* Config.option(
+        Config.string("OPENAI_BASE_URL")
+      );
+      const whisperModel = yield* Config.string("WHISPER_MODEL").pipe(
+        Config.withDefault("whisper-1")
+      );
+      // Optional: pin Whisper's language (ISO-639-1, e.g. "pt") and bias its
+      // spelling of on-camera vocabulary. Left to auto-detect, short clips full
+      // of English UI terms in a non-English course get misread as English.
+      // Unset, Whisper auto-detects with no prompt.
+      const whisperLanguage = yield* Config.option(
+        Config.string("WHISPER_LANGUAGE")
+      );
+      const whisperPrompt = yield* Config.option(
+        Config.string("WHISPER_PROMPT")
+      );
+      const openai = new OpenAI({
+        apiKey: openaiApiKey,
+        baseURL: Option.getOrUndefined(openaiBaseUrl),
+      });
 
       const getLatestOBSVideoClips = Effect.fn("getLatestOBSVideoClips")(
         function* (opts: {
@@ -199,7 +221,9 @@ export class VideoProcessingService extends Effect.Service<VideoProcessingServic
               const stream = fs.createReadStream(audioPath);
               return openai.audio.transcriptions.create({
                 file: stream,
-                model: "whisper-1",
+                model: whisperModel,
+                language: Option.getOrUndefined(whisperLanguage),
+                prompt: Option.getOrUndefined(whisperPrompt),
                 response_format: "verbose_json",
                 timestamp_granularities: ["segment", "word"],
               });
