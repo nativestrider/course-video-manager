@@ -92,6 +92,43 @@ export const useConnectToOBSVirtualCamera = (props: {
 
     let unmounted = false;
 
+    // Retries are bounded. An unbounded retry here once spun at ~110 errors/sec
+    // against a camera that was never going to be available, pinning a core and
+    // growing the renderer's heap until the host app was killed.
+    const MAX_ATTEMPTS = 12;
+    const BASE_DELAY_MS = 250;
+    const MAX_DELAY_MS = 4000;
+
+    const sleep = (ms: number) =>
+      new Promise((resolve) => setTimeout(resolve, ms));
+
+    const retry = async <T,>(
+      label: string,
+      fn: () => Promise<T>
+    ): Promise<T | undefined> => {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        if (unmounted) return;
+
+        try {
+          return await fn();
+        } catch (e) {
+          if (unmounted) return;
+
+          if (attempt === MAX_ATTEMPTS) {
+            console.error(
+              `[OBS camera] ${label} failed after ${attempt} attempts, giving up`,
+              e
+            );
+            return;
+          }
+
+          await sleep(
+            Math.min(BASE_DELAY_MS * 2 ** (attempt - 1), MAX_DELAY_MS)
+          );
+        }
+      }
+    };
+
     (async () => {
       try {
         await props.websocket.call("StartVirtualCam");
@@ -101,73 +138,97 @@ export const useConnectToOBSVirtualCamera = (props: {
 
       if (unmounted) return;
 
-      let stream: MediaStream | undefined;
+      const findObsVirtualcamDevice = (devices: MediaDeviceInfo[]) =>
+        devices.find(
+          (device) =>
+            device.kind === "videoinput" &&
+            device.label.includes("OBS Virtual Camera")
+        );
 
-      while (!unmounted) {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
+      let devices = await navigator.mediaDevices.enumerateDevices();
+
+      if (unmounted) return;
+
+      let obsVirtualcamDevice = findObsVirtualcamDevice(devices);
+
+      // Labels are only readable once camera permission has been granted, so
+      // prime it — but only when needed. `video: true` opens the default
+      // camera, which is the physical one OBS is capturing from: grabbing it
+      // on every mount reconfigured it under OBS, broke every OBS camera frame
+      // (CMSampleBufferCreateForImageBuffer -12743) and preceded a GPU lockup
+      // that froze the machine mid-recording.
+      if (!obsVirtualcamDevice) {
+        const stream = await retry("Camera permission", async () => {
+          const initialStream = await navigator.mediaDevices.getUserMedia({
             video: true,
             audio: true,
           });
 
-          stream.getTracks().forEach((track) => track.stop());
-          break;
-        } catch (e) {
-          console.error("Error getting initial media stream, retrying...", e);
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          initialStream.getTracks().forEach((track) => track.stop());
+
+          return initialStream;
+        });
+
+        if (unmounted || !stream) return;
+
+        while (!unmounted) {
+          const tracks = stream.getTracks();
+
+          if (tracks.length === 0) {
+            break;
+          }
+
+          if (tracks.every((track) => track.readyState === "ended")) {
+            break;
+          }
+
+          await sleep(50);
         }
+
+        if (unmounted) return;
+
+        devices = await navigator.mediaDevices.enumerateDevices();
+
+        if (unmounted) return;
+
+        obsVirtualcamDevice = findObsVirtualcamDevice(devices);
       }
 
-      if (unmounted || !stream) return;
+      if (!obsVirtualcamDevice) {
+        console.error(
+          "[OBS camera] OBS Virtual Camera not found among video inputs — is the Virtual Camera started in OBS?",
+          devices
+            .filter((device) => device.kind === "videoinput")
+            .map((device) => device.label)
+        );
 
-      while (true) {
-        const tracks = stream.getTracks();
-
-        if (tracks.length === 0) {
-          break;
-        }
-
-        if (tracks.every((track) => track.readyState === "ended")) {
-          break;
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        return;
       }
 
-      if (unmounted) return;
+      const obsVirtualcamDeviceId = obsVirtualcamDevice.deviceId;
 
-      const devices = await navigator.mediaDevices.enumerateDevices();
-
-      const obsVirtualcamDevice = devices.find(
-        (device) =>
-          device.kind === "videoinput" &&
-          device.label.includes("OBS Virtual Camera")
+      const obsStream = await retry("OBS Virtual Camera", () =>
+        navigator.mediaDevices.getUserMedia({
+          video: {
+            // `exact`, so a failing virtual camera is retried rather than
+            // silently swapped for the physical camera OBS is capturing.
+            deviceId: { exact: obsVirtualcamDeviceId },
+            width: 1280,
+          },
+          audio: true,
+        })
       );
 
-      if (unmounted) return;
+      if (!obsStream) return;
 
-      if (obsVirtualcamDevice) {
-        while (!unmounted) {
-          try {
-            const obsStream = await navigator.mediaDevices.getUserMedia({
-              video: {
-                deviceId: obsVirtualcamDevice.deviceId,
-                width: 1280,
-              },
-              audio: true,
-            });
+      // Unmounting while the stream was being acquired would otherwise leak it.
+      if (unmounted) {
+        obsStream.getTracks().forEach((track) => track.stop());
 
-            setMediaStream(obsStream);
-            break;
-          } catch (e) {
-            console.error(
-              "Error connecting to OBS Virtual Camera, retrying...",
-              e
-            );
-            await new Promise((resolve) => setTimeout(resolve, 250));
-          }
-        }
+        return;
       }
+
+      setMediaStream(obsStream);
     })();
 
     const stopVirtualCam = () => {
