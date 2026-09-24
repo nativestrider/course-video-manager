@@ -9,6 +9,7 @@ import {
   type ExportClipDuration,
 } from "./export-duration-check";
 import type { ExportOverlay } from "./export-hash";
+import { LANDSCAPE_VIDEO_ENCODE_ARGS } from "./ffmpeg-run";
 import { OVERLAY_TRANSFORM_EASE_IN_SECONDS } from "@/features/videos/overlay-transform";
 
 /**
@@ -498,7 +499,9 @@ describe("buildOverlayCompositeArgs", () => {
     // bitrate. This pass re-encodes the same file, so a course video with a
     // Definition Card must not come out of a second-generation CPU encode
     // with different characteristics from every course video without one.
-    expect(args).toContain("h264_nvenc");
+    // Which GPU encoder that is depends on the machine (see ffmpeg-run.ts),
+    // so compare against the shared constant rather than an encoder name.
+    expect(args.join(" ")).toContain(LANDSCAPE_VIDEO_ENCODE_ARGS.join(" "));
     expect(args).not.toContain("libx264");
     expect(args).not.toContain("-crf");
   });

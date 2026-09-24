@@ -57,16 +57,31 @@ export const BITEXACT_ARGS = [
  *
  * The vertical Shorts pipeline deliberately does NOT use it. Its subtitle
  * burn-in is libx264 at CRF 18, and its bytes must not move.
+ *
+ * The encoder follows the machine: NVENC on the Windows/WSL box, Apple's
+ * hardware encoder on macOS, where NVENC does not exist and its private
+ * options (`-rc:v`, `-cq:v`) make ffmpeg refuse to start. Both hit the same
+ * bitrate envelope and frame rate.
  */
-export const LANDSCAPE_VIDEO_ENCODE_ARGS = [
-  "-c:v",
-  "h264_nvenc",
-  "-preset",
-  "slow",
-  "-rc:v",
-  "vbr",
-  "-cq:v",
-  "19",
+export function landscapeVideoEncodeArgs(platform: NodeJS.Platform): string[] {
+  const encoder =
+    platform === "darwin"
+      ? ["-c:v", "h264_videotoolbox", "-profile:v", "high"]
+      : [
+          "-c:v",
+          "h264_nvenc",
+          "-preset",
+          "slow",
+          "-rc:v",
+          "vbr",
+          "-cq:v",
+          "19",
+        ];
+
+  return [...encoder, ...LANDSCAPE_RATE_ARGS];
+}
+
+const LANDSCAPE_RATE_ARGS = [
   "-b:v",
   "15387k",
   "-maxrate",
@@ -78,6 +93,10 @@ export const LANDSCAPE_VIDEO_ENCODE_ARGS = [
   "-r",
   "60",
 ];
+
+export const LANDSCAPE_VIDEO_ENCODE_ARGS = landscapeVideoEncodeArgs(
+  process.platform
+);
 
 export class FFmpegError extends Data.TaggedError("FFmpegError")<{
   cause: unknown;
