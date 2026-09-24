@@ -2,6 +2,20 @@ import { useEffect } from "react";
 import type { videoStateReducer } from "../video-state-reducer";
 import { shouldIgnoreKeyboardShortcut } from "./should-ignore-keyboard-shortcut";
 
+/**
+ * `O` toggles the last-frame overlay — the previous clip's final frame laid
+ * semi-transparent over the live camera, for lining up the next take — the
+ * same toggle the Stream Deck sends. Modified presses are left to the browser
+ * (Cmd+O and friends).
+ */
+export function isToggleLastFrameShortcut(
+  e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey">
+): boolean {
+  return (
+    (e.key === "o" || e.key === "O") && !e.metaKey && !e.ctrlKey && !e.altKey
+  );
+}
+
 export function useKeyboardShortcuts(
   dispatch: (action: videoStateReducer.Action) => void
 ) {
@@ -47,6 +61,8 @@ export function useKeyboardShortcuts(
         dispatch({ type: "press-end" });
       } else if (e.key === "b" || e.key === "B") {
         dispatch({ type: "pause-toggle-key-pressed" });
+      } else if (isToggleLastFrameShortcut(e)) {
+        dispatch({ type: "toggle-last-frame-of-video" });
       }
     };
 
